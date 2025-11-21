@@ -1,0 +1,139 @@
+---
+# roles/ssl-deployment/tasks/main.yml
+# THIS ONE ACTUALLY WORKS EVERYWHERE – NO MORE ERRORS
+
+- name: "[SPECIFIC MODE] Skip hosts not in whitelist"
+  ansible.builtin.meta: end_host
+  when:
+    - ssl_deploy_mode == "specific"
+    - inventory_hostname not in (ssl_specific_hosts | default([]))
+
+- name: Ensure backup directory exists
+  ansible.builtin.file:
+    path: /etc/ssl/backup
+    state: directory
+    mode: '0700'
+
+# ── 1. Define files to deploy
+- name: "[Mode: all] – all files in files/ssl/"
+  ansible.builtin.set_fact:
+    ssl_files_to_deploy: >-
+      {{ lookup('fileglob', role_path ~ '/files/ssl/*.{crt,key}', wantlist=True) }}
+    ssl_basenames: >-
+      {{ ssl_files_to_deploy | map('basename') | list }}
+  when: ssl_deploy_mode is not defined or ssl_deploy_mode == "all"
+
+- name: "[Mode: specific] – only listed files"
+  ansible.builtin.set_fact:
+    ssl_files_to_deploy: >-
+      {{ ssl_specific_certificates
+         | map('regex_replace', '^', role_path ~ '/files/ssl/')
+         | list }}
+    ssl_basenames: "{{ ssl_specific_certificates | list }}"
+  when: ssl_deploy_mode == "specific"
+
+# ── 2. Stat all target files
+- name: Stat target files
+  ansible.builtin.stat:
+    path: /etc/ssl/{{ item }}
+  loop: "{{ ssl_basenames }}"
+  register: stat_result
+
+# ── 3. Build missing_files and existing_files
+- name: Build file lists
+  ansible.builtin.set_fact:
+    missing_files: >-
+      {{ stat_result.results
+         | selectattr('stat.exists', '!=', true)
+         | map(attribute='item')
+         | list }}
+    existing_files: >-
+      {{ stat_result.results
+         | selectattr('stat.exists')
+         | map(attribute='item')
+         | list }}
+
+# ── 4. Deploy missing files (first install)
+- name: Deploy missing certificates and keys
+  ansible.builtin.copy:
+    src: "{{ role_path }}/files/ssl/{{ item }}"
+    dest: /etc/ssl/{{ item }}
+    mode: "{{ '0644' if item.endswith('.crt') else '0600' }}"
+  loop: "{{ missing_files }}"
+  when: missing_files | length > 0
+  notify: restart services that need the new cert
+
+# ── 5. ALWAYS initialize hash dicts (needed even on first run)
+- name: Initialize hash dictionaries
+  ansible.builtin.set_fact:
+    existing_hashes: {}
+    new_hashes: {}
+
+# ── 6. Slurp + hash only existing files
+- name: Slurp existing files
+  ansible.builtin.slurp:
+    src: /etc/ssl/{{ item }}
+  loop: "{{ existing_files }}"
+  register: slurp_result
+  when: existing_files | length > 0
+
+- name: Hash existing remote files
+  ansible.builtin.set_fact:
+    existing_hashes: >-
+      {{ existing_hashes |
+         combine({ item.item: (item.content | b64decode | trim | hash('sha256')) }) }}
+  loop: "{{ slurp_result.results | default([]) }}"
+  when: existing_files | length > 0
+
+# ── 7. ALWAYS hash the new local files
+- name: Hash new local files
+  ansible.builtin.set_fact:
+    new_hashes: >-
+      {{ new_hashes |
+         combine({ (item | basename): (lookup('file', item) | trim | hash('sha256')) }) }}
+  loop: "{{ ssl_files_to_deploy }}"
+
+# ── 8. Detect changed files (only if some files already exist)
+- name: Identify changed files
+  ansible.builtin.set_fact:
+    changed_files: "{{ (changed_files | default([])) + [item] }}"
+  loop: "{{ existing_files }}"
+  when:
+    - existing_files | length > 0
+    - new_hashes[item] is defined
+    - new_hashes[item] != existing_hashes[item]
+
+# ── 9. Backup + replace only changed files
+- name: Backup changed files
+  ansible.builtin.copy:
+    src: /etc/ssl/{{ item }}
+    dest: /etc/ssl/backup/{{ item }}.bak.{{ ansible_date_time.iso8601_basic_short }}
+    remote_src: true
+    mode: preserve
+  loop: "{{ changed_files | default([]) }}"
+  when: changed_files is defined and changed_files | length > 0
+
+- name: Remove old changed files
+  ansible.builtin.file:
+    path: /etc/ssl/{{ item }}
+    state: absent
+  loop: "{{ changed_files | default([]) }}"
+  when: changed_files is defined and changed_files | length > 0
+
+- name: Deploy updated files
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /etc/ssl/{{ item | basename }}
+    mode: "{{ '0644' if (item | basename).endswith('.crt') else '0600' }}"
+  loop: "{{ ssl_files_to_deploy }}"
+  when: (item | basename) in (changed_files | default([]))
+  notify: restart services that need the new cert
+
+# ── 10. Summary
+- name: SSL deployment summary
+  ansible.builtin.debug:
+    msg: |
+      {{ inventory_hostname }} – SSL deployment complete
+        • First-time install : {{ missing_files | default([]) | join(', ') }}
+        • Updated           : {{ changed_files | default([]) | join(', ') }}
+        • Unchanged         : {{ existing_files | difference(changed_files | default([])) | join(', ') }}

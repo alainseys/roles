@@ -1,0 +1,26 @@
+---
+- name: Restart nginx
+  ansible.builtin.service:
+    name: nginx
+    state: restarted
+  when: "'nginx' in ansible_services"
+
+- name: Restart apache
+  ansible.builtin.service:
+    name: httpd  # Change this to apache if using Apache on systems like CentOS
+    state: restarted
+  when: "'apache2' in ansible_services"
+
+# ------------------------------------------------------------------
+# Optional: Add this handler in roles/ssl-deployment/handlers/main.yml
+# ------------------------------------------------------------------
+- name: restart services that need the new cert
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: restarted
+  loop:
+    - nginx
+    - haproxy
+    - httpd
+    - netbox
+  listen: restart services that need the new cert
