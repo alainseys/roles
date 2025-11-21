@@ -1,3 +1,4 @@
-#SPDX-License-Identifier: MIT-0
 ---
-# vars file for win-iis-ssl
+# vars file for windows-iis-certificate
+pfx_dest_path: 'C:\temp\yourcertificate.pfx'
+pfx_local_cert: 'yourcertificate.pfx'

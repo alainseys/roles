@@ -1,3 +1,38 @@
-#SPDX-License-Identifier: MIT-0
 ---
-# tasks file for win-iis-ssl
+# tasks file for iis-ssl-certificate
+- name: Esnure the ssl folder exists
+  ansible.windows.win_file:
+    path: C:\temp
+    state: directory
+  become: true
+
+
+- name: Copy ssl certificate
+  ansible.windows.win_copy:
+    src: "{{ pfx_local_cert }}"
+    dest: "{{ pfx_dest_path }}"
+  become: true
+
+- name: Import the ssl certificate
+  ansible.windows.win_certificate_store:
+    path: "{{ pfx_dest_path }}"
+    password: 'WebAS'
+    store_location: LocalMachine
+    key_storage: machine
+    state: present
+  register: cert_import
+
+- name: Configure HTTPS binding for IIS
+  community.windows.win_iis_webbinding:
+    name: '{{ iis_website_name }}'
+    protocol: 'https'
+    port: 443
+    certificate_hash: '{{ cert_import.thumbprints[0] }}'
+    state: present
+
+- name: Remove temporary PFX from Windows host
+  ansible.windows.win_file:
+    path: "{{ pfx_dest_path }}"
+    state: absent
+
+
