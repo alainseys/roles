@@ -1,0 +1,10 @@
+# vars/main.yml
+---
+supported_filesystems:
+  - ext2
+  - ext3
+  - ext4
+  - xfs
+  - btrfs
+  - reiserfs
+  - jfs
