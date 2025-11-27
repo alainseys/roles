@@ -1,0 +1,14 @@
+# tasks/unmount.yml
+---
+- name: Unmount all specified filesystems
+  ansible.posix.mount:
+    path: "{{ item.mount }}"
+    state: unmounted
+  loop: "{{ mounts }}"
+  ignore_errors: yes
+
+- name: Remove mount point directories
+  ansible.builtin.file:
+    path: "{{ item.mount }}"
+    state: absent
+  loop: "{{ mounts }}"
