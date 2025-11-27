@@ -1,0 +1,48 @@
+# tasks/main.yml
+---
+- name: Ensure mount point directories exist
+  ansible.builtin.file:
+    path: "{{ item.mount }}"
+    state: directory
+    mode: '0755'
+  loop: "{{ mounts | dict2items | map(attribute='value') | list }}"
+  when: item.mount_state | default('present') == 'present'
+
+- name: Add mount entries to fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "^{{ item.src }}\\s+{{ item.mount }}\\s"
+    line: "{{ item.src }} {{ item.mount }} {{ item.fstype | default('auto') }} {{ item.opts | default('defaults') }} 0 0"
+    backup: yes
+  loop: "{{ mounts | dict2items | map(attribute='value') | list }}"
+  when: item.mount_state | default('present') == 'present'
+  notify: mount all filesystems
+
+- name: Remove mount entries from fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "^{{ item.src }}\\s+{{ item.mount }}\\s"
+    state: absent
+  loop: "{{ mounts | dict2items | map(attribute='value') | list }}"
+  when: item.mount_state | default('present') == 'absent'
+  notify: unmount filesystems
+
+- name: Ensure filesystems are mounted
+  ansible.posix.mount:
+    path: "{{ item.mount }}"
+    src: "{{ item.src }}"
+    fstype: "{{ item.fstype | default('auto') }}"
+    opts: "{{ item.opts | default('defaults') }}"
+    state: mounted
+  loop: "{{ mounts | dict2items | map(attribute='value') | list }}"
+  when: item.mount_state | default('present') == 'present'
+
+- name: Ensure filesystems are unmounted
+  ansible.posix.mount:
+    path: "{{ item.mount }}"
+    state: unmounted
+  loop: "{{ mounts | dict2items | map(attribute='value') | list }}"
+  when: item.mount_state | default('present') == 'absent'
+
+- name: Flush handlers
+  meta: flush_handlers
